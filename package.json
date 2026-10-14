@@ -1,0 +1,12 @@
+{
+  "name": "glutenzero",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "node build.mjs --check",
+    "test": "node tests/gluten-engine.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2"
+  }
+}

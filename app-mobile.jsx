@@ -93,7 +93,7 @@ const PRODUCTS = {
       { name: 'Sal', risk: 'safe' },
     ],
     crossContamination: { level: 'low', text: 'Fabricado en planta dedicada sin gluten' },
-    reports: { safe: 142, unsafe: 1 },
+    reports: { safe: 0, unsafe: 0 },
   },
   dudoso: {
     name: 'Salsa de soja clásica',
@@ -113,7 +113,7 @@ const PRODUCTS = {
       { name: 'Conservante (E202)', risk: 'safe' },
     ],
     crossContamination: { level: 'high', text: 'Contiene trigo como ingrediente' },
-    reports: { safe: 4, unsafe: 38 },
+    reports: { safe: 0, unsafe: 0 },
   },
   noApto: {
     name: 'Cerveza Tostada',
@@ -132,16 +132,9 @@ const PRODUCTS = {
       { name: 'Levadura', risk: 'safe' },
     ],
     crossContamination: { level: 'critical', text: 'Producto elaborado con cereales con gluten' },
-    reports: { safe: 0, unsafe: 287 },
+    reports: { safe: 0, unsafe: 0 },
   },
 };
-
-const HISTORY_SEED = [
-  { name: 'Yogur natural', brand: 'Danone', state: 'apto', emoji: '🥛', when: 'Hace 2 h' },
-  { name: 'Pasta de lentejas', brand: 'Barilla', state: 'apto', emoji: '🍝', when: 'Ayer' },
-  { name: 'Galletas Príncipe', brand: 'LU', state: 'noApto', emoji: '🍪', when: 'Ayer' },
-  { name: 'Hummus tradicional', brand: 'Mercadona', state: 'dudoso', emoji: '🥣', when: 'Hace 2 d' },
-];
 
 // ─────────────────────────────────────────────────────────────
 // History + Profile stores (localStorage-backed)
@@ -190,6 +183,30 @@ const historyStore = {
     return next;
   },
   clear() { historyStore.save([]); },
+};
+
+// Análisis completo (estricto, sin ajustar al perfil) de los últimos productos.
+// Sirve para verlos sin conexión en el súper y para reabrir lecturas de fotos,
+// que no tienen código de barras que volver a consultar.
+const PRODUCT_CACHE_KEY = 'gz.products.v1';
+const productCache = {
+  load() {
+    try { const raw = localStorage.getItem(PRODUCT_CACHE_KEY); return raw ? JSON.parse(raw) : []; }
+    catch { return []; }
+  },
+  get(barcode) {
+    if (!barcode) return null;
+    return productCache.load().find(p => p.barcode === barcode) || null;
+  },
+  put(product) {
+    if (!product || !product.barcode) return;
+    const { raw, ...lite } = product;  // el objeto bruto de OFF ocupa mucho
+    const list = productCache.load().filter(p => p.barcode !== product.barcode);
+    const next = [{ ...lite, cachedAt: Date.now() }, ...list].slice(0, 80);
+    try { localStorage.setItem(PRODUCT_CACHE_KEY, JSON.stringify(next)); }
+    catch { try { localStorage.setItem(PRODUCT_CACHE_KEY, JSON.stringify(next.slice(0, 20))); } catch {} }
+  },
+  clear() { try { localStorage.removeItem(PRODUCT_CACHE_KEY); } catch {} },
 };
 
 const FAVORITES_KEY = 'glutenzero_favorites_v1';
@@ -342,8 +359,12 @@ function GZLogo({ size = 28, color = tokens.greenDeep }) {
 // ─────────────────────────────────────────────────────────────
 // Screen 1: HOME
 // ─────────────────────────────────────────────────────────────
-function HomeScreen({ onScan, userName = 'Lucía', recent = [] }) {
+function HomeScreen({ onScan, userName = 'Lucía', recent = [], onOpen, onSeeAll }) {
   const hour = new Date().getHours();
+  const weekAgo = Date.now() - 7 * 24 * 3600 * 1000;
+  const week = recent.filter(p => p.ts && p.ts >= weekAgo);
+  const weekSafe = week.filter(p => p.state === 'apto').length;
+  const weekPct = week.length ? Math.round((weekSafe / week.length) * 100) : 0;
   const greet = hour < 12 ? 'Buenos días' : hour < 20 ? 'Buenas tardes' : 'Buenas noches';
 
   return (
@@ -429,14 +450,14 @@ function HomeScreen({ onScan, userName = 'Lucía', recent = [] }) {
           <div style={{ flex: 1, paddingRight: 14 }}>
             <div style={{ fontSize: 12, color: tokens.inkMuted, fontWeight: 500, letterSpacing: 0.2, textTransform: 'uppercase' }}>Esta semana</div>
             <div style={{ fontSize: 22, fontWeight: 600, color: tokens.ink, marginTop: 4, letterSpacing: -0.4 }}>
-              23 <span style={{ fontSize: 13, fontWeight: 500, color: tokens.inkMuted }}>escaneos</span>
+              {week.length} <span style={{ fontSize: 13, fontWeight: 500, color: tokens.inkMuted }}>{week.length === 1 ? 'escaneo' : 'escaneos'}</span>
             </div>
           </div>
           <div style={{ width: 1, background: tokens.divider }} />
           <div style={{ flex: 1, paddingLeft: 14 }}>
             <div style={{ fontSize: 12, color: tokens.inkMuted, fontWeight: 500, letterSpacing: 0.2, textTransform: 'uppercase' }}>Aptos</div>
             <div style={{ fontSize: 22, fontWeight: 600, color: tokens.green, marginTop: 4, letterSpacing: -0.4 }}>
-              19 <span style={{ fontSize: 13, fontWeight: 500, color: tokens.inkMuted }}>· 83%</span>
+              {weekSafe} {week.length > 0 && <span style={{ fontSize: 13, fontWeight: 500, color: tokens.inkMuted }}>· {weekPct}%</span>}
             </div>
           </div>
         </div>
@@ -452,17 +473,30 @@ function HomeScreen({ onScan, userName = 'Lucía', recent = [] }) {
             fontSize: 17, fontWeight: 600, margin: 0,
             color: tokens.ink, letterSpacing: -0.3,
           }}>Recientes</h2>
-          <button style={{
-            background: 'none', border: 'none', cursor: 'pointer',
-            fontSize: 14, color: tokens.green, fontWeight: 500,
-            fontFamily: fonts.sans,
-          }}>Ver todo</button>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {(recent.length ? recent : HISTORY_SEED).slice(0, 4).map((p, i) =>
-            <ProductTile key={p.barcode || i} product={{ ...p, when: p.ts ? relativeTime(p.ts) : p.when }} />
+          {recent.length > 4 && (
+            <button onClick={onSeeAll} style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 14, color: tokens.green, fontWeight: 500,
+              fontFamily: fonts.sans,
+            }}>Ver todo</button>
           )}
         </div>
+        {recent.length ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {recent.slice(0, 4).map((p, i) =>
+              <ProductTile key={p.barcode || i} onClick={() => onOpen && onOpen(p)}
+                product={{ ...p, when: relativeTime(p.ts) }} />
+            )}
+          </div>
+        ) : (
+          <div style={{
+            background: tokens.surface, borderRadius: 16, padding: '18px 16px',
+            border: `1px dashed ${tokens.divider}`, textAlign: 'center',
+            fontSize: 14, color: tokens.inkMuted, lineHeight: 1.45,
+          }}>
+            Aún no has escaneado nada. Tus productos aparecerán aquí.
+          </div>
+        )}
       </div>
 
       {/* Tip card */}
@@ -569,6 +603,8 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
   const [manualCode, setManualCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // El código existe pero Open Food Facts no lo tiene → ofrecer leer la etiqueta
+  const [notFound, setNotFound] = useState(false);
 
   // Manual sub-mode: code vs name
   const [manualMode, setManualMode] = useState('code'); // 'code' | 'name'
@@ -579,6 +615,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
   // OCR state
   const [ocrPhase, setOcrPhase] = useState('idle'); // idle | starting | live | capturing | recognizing | done | error
   const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrPass, setOcrPass] = useState(1); // 2 = segunda lectura (texto disperso)
   const [ocrError, setOcrError] = useState(null);
   const ocrVideoRef = useRef(null);
   const ocrStreamRef = useRef(null);
@@ -677,7 +714,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
             catch (e) {
               if (cancelled) return;
               let msg = 'Error consultando el producto.';
-              if (e.code === 'not_found') msg = `Código ${code} no está en Open Food Facts.`;
+              if (e.code === 'not_found') { msg = `El código ${code} no está en Open Food Facts. Puedes fotografiar la etiqueta y lo analizamos igual.`; setNotFound(true); }
               else if (e.code === 'timeout') msg = 'La consulta tardó demasiado. Reintenta.';
               else if (e.code === 'network') msg = 'Sin conexión. Revisa Wi-Fi/datos.';
               setCamError(msg);
@@ -769,12 +806,20 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
     if (!window.GZOCR) {
       setOcrError('Motor OCR no disponible.'); setOcrPhase('error'); return;
     }
-    setOcrPhase('recognizing'); setOcrProgress(0); setOcrError(null);
+    setOcrPhase('recognizing'); setOcrProgress(0); setOcrPass(1); setOcrError(null);
     try {
       const { text } = await window.GZOCR.recognize(source, (m) => {
+        if (m && m.pass === 2) setOcrPass(2);
         if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
           setOcrProgress(Math.max(0, Math.min(100, m.progress * 100)));
         }
+      }, {
+        // Segunda pasada solo si con la primera no sale un veredicto: foto
+        // ilegible o sin «Ingredientes» ni mención «sin gluten».
+        isGoodEnough: (t) => {
+          const r = GlutenEngine.analyzeText(t);
+          return !!r && (r.state !== 'dudoso' || r.ocrQuality.ok);
+        },
       });
       if (!text || text.replace(/\s/g, '').length < 6) {
         setOcrError('No se pudo leer texto. Acércate más o usa mejor luz.');
@@ -793,7 +838,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
     if (!v || !v.videoWidth) return;
     setOcrPhase('capturing');
     try {
-      const canvas = window.GZOCR.captureFrame(v, 1280);
+      const canvas = window.GZOCR.captureFrame(v, 1600);
       await runOcr(canvas);
     } catch (e) {
       setOcrError('No se pudo capturar la imagen.');
@@ -806,7 +851,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
     if (!f) return;
     e.target.value = '';
     try {
-      // Preprocesado (escala de grises + contraste) para mejor OCR
+      // Reescalado a tamaño cómodo para el OCR (sin pasar a grises: ver ocr.js)
       const canvas = await (window.GZOCR.enhanceFile
         ? window.GZOCR.enhanceFile(f, 1600)
         : Promise.resolve(f));
@@ -819,12 +864,12 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
   const submitManual = async (code) => {
     const c = (code || manualCode).trim();
     if (!c) return;
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setNotFound(false);
     try {
       await onLookup(c);
     } catch (e) {
       let msg = 'Error de red. ¿Tienes conexión?';
-      if (e.code === 'not_found') msg = 'No encontrado en Open Food Facts. Prueba con otro código.';
+      if (e.code === 'not_found') { msg = 'Este código no está en Open Food Facts.'; setNotFound(true); }
       else if (e.code === 'timeout') msg = 'La consulta tardó demasiado. Reintenta con mejor señal.';
       else if (e.code === 'http') msg = `Error del servidor (${e.status}). Reintenta en unos segundos.`;
       else if (e.code === 'network') msg = 'Sin conexión a Open Food Facts. Revisa Wi-Fi/datos.';
@@ -915,7 +960,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
               {ocrPhase === 'starting' && 'Preparando cámara…'}
               {ocrPhase === 'live' && 'Encuadra los ingredientes'}
               {ocrPhase === 'capturing' && 'Capturando…'}
-              {ocrPhase === 'recognizing' && `Leyendo texto · ${Math.round(ocrProgress)}%`}
+              {ocrPhase === 'recognizing' && `${ocrPass === 2 ? 'Segunda lectura' : 'Leyendo texto'} · ${Math.round(ocrProgress)}%`}
               {ocrPhase === 'error' && 'Error de lectura'}
             </>
           ) : 'Introducir código manual'}
@@ -1019,11 +1064,21 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
                 {camPhase === 'nocam' && 'Tu dispositivo no tiene cámara accesible.'}
                 {camError || 'Usa el modo Manual para introducir el código a mano.'}
               </p>
-              <button onClick={() => setMode('manual')} style={{
-                padding: '12px 22px', borderRadius: 999, border: 'none', cursor: 'pointer',
-                background: '#fff', color: tokens.greenDeep,
-                fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
-              }}>Usar entrada manual</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                {notFound && (
+                  <button onClick={() => { setNotFound(false); setMode('label'); }} style={{
+                    padding: '12px 22px', borderRadius: 999, border: 'none', cursor: 'pointer',
+                    background: '#fff', color: tokens.greenDeep,
+                    fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
+                  }}>Fotografiar la etiqueta</button>
+                )}
+                <button onClick={() => setMode('manual')} style={{
+                  padding: '12px 22px', borderRadius: 999, border: 'none', cursor: 'pointer',
+                  background: notFound ? 'rgba(255,255,255,0.16)' : '#fff',
+                  color: notFound ? '#fff' : tokens.greenDeep,
+                  fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
+                }}>Usar entrada manual</button>
+              </div>
             </div>
           )}
         </>
@@ -1074,6 +1129,18 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
             }}>Encuadra la lista de <b>Ingredientes</b></div>
           </div>
 
+          {/* Selector de foto. Sin «capture»: así el móvil deja elegir entre la
+              galería y la cámara (con capture="environment" abría siempre la
+              cámara aunque el botón diga «galería»). Vive fuera de los controles
+              para seguir disponible cuando la cámara falla o no hay permiso. */}
+          <input
+            ref={ocrFileRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFile}
+            style={{ display: 'none' }}
+          />
+
           {/* Error overlay */}
           {ocrPhase === 'error' && (
             <div style={{
@@ -1085,11 +1152,21 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
               <div style={{ fontSize: 48, marginBottom: 12 }}>⚠️</div>
               <h3 style={{ fontFamily: fonts.serif, fontSize: 22, margin: '0 0 8px', fontWeight: 500 }}>No se pudo leer</h3>
               <p style={{ fontSize: 14, opacity: 0.8, margin: '0 0 20px', lineHeight: 1.5 }}>{ocrError}</p>
-              <button onClick={() => { setOcrPhase('live'); setOcrError(null); }} style={{
-                padding: '12px 22px', borderRadius: 999, border: 'none', cursor: 'pointer',
-                background: '#fff', color: tokens.greenDeep,
-                fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
-              }}>Reintentar</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'center' }}>
+                {ocrStreamRef.current && (
+                  <button onClick={() => { setOcrPhase('live'); setOcrError(null); }} style={{
+                    padding: '12px 22px', borderRadius: 999, border: 'none', cursor: 'pointer',
+                    background: '#fff', color: tokens.greenDeep,
+                    fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
+                  }}>Reintentar</button>
+                )}
+                <button onClick={() => ocrFileRef.current && ocrFileRef.current.click()} style={{
+                  padding: '12px 22px', borderRadius: 999, cursor: 'pointer',
+                  background: ocrStreamRef.current ? 'rgba(255,255,255,0.16)' : '#fff',
+                  color: ocrStreamRef.current ? '#fff' : tokens.greenDeep,
+                  border: 'none', fontSize: 14, fontWeight: 600, fontFamily: fonts.sans,
+                }}>Subir foto desde galería</button>
+              </div>
             </div>
           )}
 
@@ -1106,7 +1183,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
                 border: '3px solid rgba(255,255,255,0.15)', borderTopColor: '#5DD78A',
                 animation: 'gz-spin 1s linear infinite', marginBottom: 18,
               }} />
-              <div style={{ fontFamily: fonts.serif, fontSize: 22, margin: '0 0 6px', fontWeight: 500 }}>Leyendo etiqueta</div>
+              <div style={{ fontFamily: fonts.serif, fontSize: 22, margin: '0 0 6px', fontWeight: 500 }}>{ocrPass === 2 ? 'Buscando «sin gluten»' : 'Leyendo etiqueta'}</div>
               <div style={{ fontSize: 14, opacity: 0.7 }}>{Math.round(ocrProgress)}%</div>
               <div style={{
                 width: 200, height: 4, marginTop: 14, borderRadius: 999,
@@ -1162,14 +1239,6 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
                 </svg>
                 Subir foto desde galería
               </button>
-              <input
-                ref={ocrFileRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleFile}
-                style={{ display: 'none' }}
-              />
             </div>
           )}
         </>
@@ -1240,6 +1309,14 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
                 }}>
                   <span>⚠️</span> {error}
                 </div>
+              )}
+              {notFound && manualMode === 'code' && (
+                <button onClick={() => { setNotFound(false); setError(null); setMode('label'); }} style={{
+                  width: '100%', height: 48, marginTop: 10, cursor: 'pointer',
+                  background: tokens.greenSoft, color: tokens.greenDeep,
+                  border: 'none', borderRadius: 14, fontSize: 15, fontWeight: 600,
+                  fontFamily: fonts.sans,
+                }}>📷 Fotografiar la etiqueta en su lugar</button>
               )}
 
               <button onClick={() => submitManual()} disabled={loading || !manualCode.trim()} style={{
@@ -1471,7 +1548,7 @@ function ScannerScreen({ onCancel, onLookup, onLookupText, mode, setMode }) {
 // ─────────────────────────────────────────────────────────────
 // Screen 3: RESULT
 // ─────────────────────────────────────────────────────────────
-function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavorite }) {
+function ResultScreen({ product, onClose, onScanAgain, onPhotoLabel, isFavorite, onToggleFavorite }) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setMounted(true), 50);
@@ -1483,7 +1560,8 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
       bg: tokens.green, bgDeep: tokens.greenDeep,
       accent: '#5DD78A', soft: tokens.greenSoft,
       icon: 'check',
-      headline: '¡Puedes comerlo!',
+      // Si el «apto» viene de relajar avisos en el perfil, no lo celebramos igual
+      headline: product.profileNote ? 'Apto para tu perfil' : '¡Puedes comerlo!',
     },
     dudoso: {
       bg: tokens.amber, bgDeep: '#9A6710',
@@ -1634,6 +1712,35 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
         </div>
       </div>
 
+      {/* Veredicto ajustado al perfil del usuario */}
+      {product.profileNote && (
+        <div style={{ padding: '14px 16px 0' }}>
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            background: tokens.amberSoft, padding: '12px 16px',
+            borderRadius: 14, color: '#7A4F0B', fontSize: 13, lineHeight: 1.45,
+          }}>
+            <span style={{ fontSize: 16, lineHeight: 1.2 }}>👤</span>
+            <span>{product.profileNote} Puedes cambiarlo en Perfil.</span>
+          </div>
+        </div>
+      )}
+
+      {/* Mostrado desde la copia guardada (sin conexión) */}
+      {product.offline && (
+        <div style={{ padding: '14px 16px 0' }}>
+          <div style={{
+            display: 'flex', alignItems: 'flex-start', gap: 10,
+            background: tokens.surface, border: `1px solid ${tokens.divider}`,
+            padding: '12px 16px', borderRadius: 14,
+            color: tokens.inkSoft, fontSize: 13, lineHeight: 1.45,
+          }}>
+            <span style={{ fontSize: 16, lineHeight: 1.2 }}>📴</span>
+            <span>Sin conexión: mostramos el análisis guardado{product.cachedAt ? ` el ${new Date(product.cachedAt).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}` : ''}. La receta del fabricante puede haber cambiado.</span>
+          </div>
+        </div>
+      )}
+
       {/* Certification (apto only) */}
       {product.cert && (
         <div style={{ padding: '14px 16px 0' }}>
@@ -1694,7 +1801,9 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
             }}>
               <div style={{
                 width: 8, height: 8, borderRadius: 999,
-                background: ing.risk === 'danger' ? tokens.coral : tokens.green,
+                background: ing.risk === 'danger' ? tokens.coral
+                  : ing.risk === 'doubt' ? tokens.amber
+                  : tokens.green,
                 flexShrink: 0,
               }} />
               <span style={{
@@ -1708,6 +1817,12 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
                   fontSize: 11, fontWeight: 600,
                   color: tokens.coral, textTransform: 'uppercase', letterSpacing: 0.4,
                 }}>Gluten</span>
+              )}
+              {ing.risk === 'doubt' && (
+                <span style={{
+                  fontSize: 11, fontWeight: 600,
+                  color: '#7A4F0B', textTransform: 'uppercase', letterSpacing: 0.4,
+                }}>Revisar</span>
               )}
             </div>
           ))}
@@ -1750,7 +1865,8 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
         </div>
       </div>
 
-      {/* Community reports */}
+      {/* Community reports — solo con datos reales (hoy no hay backend) */}
+      {product.reports && (product.reports.safe + product.reports.unsafe) > 0 && (
       <div style={{ padding: '20px 20px 0' }}>
         <h2 style={{
           fontSize: 13, fontWeight: 600, margin: '0 0 12px',
@@ -1783,6 +1899,7 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
           </div>
         </div>
       </div>
+      )}
 
       {/* Disclaimer */}
       <div style={{ padding: '20px 20px 0' }}>
@@ -1799,6 +1916,14 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
         padding: '24px 20px 40px',
         display: 'flex', flexDirection: 'column', gap: 10,
       }}>
+        {/* Open Food Facts lo tiene pero sin ingredientes: que lea la etiqueta */}
+        {product.reason === 'incomplete' && onPhotoLabel && (
+          <button onClick={onPhotoLabel} style={{
+            height: 54, borderRadius: 16, cursor: 'pointer',
+            background: tokens.amberSoft, color: '#7A4F0B', border: 'none',
+            fontSize: 16, fontWeight: 600, fontFamily: fonts.sans, letterSpacing: -0.2,
+          }}>📷 Fotografiar la etiqueta</button>
+        )}
         <button onClick={onScanAgain} style={{
           height: 54, borderRadius: 16, border: 'none', cursor: 'pointer',
           background: tokens.greenDeep, color: '#fff',
@@ -1828,6 +1953,38 @@ function ResultScreen({ product, onClose, onScanAgain, isFavorite, onToggleFavor
 // ─────────────────────────────────────────────────────────────
 // Screen: RESTAURANTS — mapa con OSM + lugares "diet:gluten_free=yes"
 // ─────────────────────────────────────────────────────────────
+// Etiqueta legible de diet:gluten_free (OpenStreetMap)
+const DIET_INFO = {
+  only:    { label: '100% sin gluten', short: '100% SG', icon: '✓', color: '#0F4A2E' },
+  yes:     { label: 'Menú sin gluten', short: 'Menú SG', icon: '✓', color: '#1F7A4D' },
+  limited: { label: 'Algunas opciones sin gluten', short: 'Algunas opciones', icon: '≈', color: '#D98E1E' },
+};
+const dietInfo = (d) => DIET_INFO[d] || DIET_INFO.yes;
+
+const AMENITY_LABEL = {
+  cafe: 'Cafetería', bakery: 'Panadería', fast_food: 'Comida rápida', ice_cream: 'Heladería',
+  pub: 'Pub', bar: 'Bar', food_court: 'Zona de restauración', restaurant: 'Restaurante',
+};
+
+// Enlace a Google Maps (ficha con reseñas). La URL documentada solo admite
+// «query»: usamos nombre + dirección; si no hay dirección, la forma /@lat,lon
+// para que busque el nombre en ese punto.
+function googleMapsUrl(place) {
+  const addr = [place.address, place.city].filter(Boolean).join(', ');
+  if (addr) return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${place.name}, ${addr}`)}`;
+  return `https://www.google.com/maps/search/${encodeURIComponent(place.name)}/@${place.lat},${place.lon},18z`;
+}
+const osmEditUrl = (lat, lon) => `https://www.openstreetmap.org/edit#map=18/${lat}/${lon}`;
+
+// Lo que conviene preguntar SIEMPRE antes de pedir: ni OSM ni las reseñas lo garantizan
+const ASK_CHECKLIST = [
+  '¿Tenéis carta o platos específicos sin gluten?',
+  '¿La freidora es exclusiva para lo sin gluten? (si comparten aceite con rebozados, no es apto)',
+  '¿Se cocina en superficies y con utensilios separados?',
+  '¿El pan, la pasta o la cerveza sin gluten se sirven sin tocar los normales?',
+  '¿El personal de cocina sabe qué es la contaminación cruzada?',
+];
+
 function RestaurantsScreen({ favorites = [], onOpenProduct }) {
   const [phase, setPhase] = useState('idle'); // idle | locating | loading | ready | error
   const [errorMsg, setErrorMsg] = useState(null);
@@ -1936,14 +2093,15 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
 
     filtered.forEach(p => {
       const isRec = userNotesById[p.id]?.recommended;
-      const color = isRec ? '#0F4A2E' : '#1F7A4D';
+      const di = dietInfo(p.diet);
+      const color = isRec ? '#0F4A2E' : di.color;
       const icon = L.divIcon({
         html: `<div style="
           width:28px;height:28px;border-radius:50% 50% 50% 0;
           background:${color};transform:rotate(-45deg);
           border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);
           display:flex;align-items:center;justify-content:center;
-        "><div style="transform:rotate(45deg);color:#fff;font-size:12px;font-weight:700;">${isRec ? '★' : '✓'}</div></div>`,
+        "><div style="transform:rotate(45deg);color:#fff;font-size:12px;font-weight:700;">${isRec ? '★' : di.icon}</div></div>`,
         className: '',
         iconSize: [28, 28], iconAnchor: [14, 28], popupAnchor: [0, -28],
       });
@@ -2003,8 +2161,10 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
             opacity: (phase === 'locating' || phase === 'loading') ? 0.5 : 1,
           }}>↻ Buscar de nuevo</button>
         </div>
-        <p style={{ fontSize: 13, color: tokens.inkMuted, margin: '4px 0 0' }}>
-          Restaurantes etiquetados como «sin gluten» en OpenStreetMap.
+        <p style={{ fontSize: 13, color: tokens.inkMuted, margin: '4px 0 0', lineHeight: 1.45 }}>
+          Locales etiquetados en OpenStreetMap:{' '}
+          <span style={{ color: DIET_INFO.yes.color, fontWeight: 600 }}>✓ menú sin gluten</span>{' · '}
+          <span style={{ color: DIET_INFO.limited.color, fontWeight: 600 }}>≈ algunas opciones</span>
         </p>
       </div>
 
@@ -2046,7 +2206,9 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
       </div>
 
       {/* Map container */}
-      <div style={{ position: 'relative', height: 280, margin: '0 16px', borderRadius: 18, overflow: 'hidden', border: `1px solid ${tokens.divider}`, flexShrink: 0 }}>
+      {/* isolation: los z-index internos de Leaflet (400-1000) no deben pasar
+          por encima de las fichas que se abren sobre la pantalla (zIndex 50) */}
+      <div style={{ position: 'relative', height: 280, margin: '0 16px', borderRadius: 18, overflow: 'hidden', border: `1px solid ${tokens.divider}`, flexShrink: 0, isolation: 'isolate' }}>
         <div ref={mapElRef} style={{ position: 'absolute', inset: 0, background: tokens.bgSoft }} />
 
         {(phase === 'idle' || phase === 'locating' || phase === 'loading') && (
@@ -2104,6 +2266,15 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
           </div>
         )}
 
+        {phase === 'ready' && center && (
+          <a href={osmEditUrl(center.lat, center.lon)} target="_blank" rel="noopener noreferrer" style={{
+            display: 'block', textAlign: 'center', margin: '6px 0 14px',
+            fontSize: 12.5, color: tokens.green, fontWeight: 600, textDecoration: 'none',
+          }}>
+            ¿Falta un local apto? Añádelo en OpenStreetMap y aparecerá aquí ↗
+          </a>
+        )}
+
         {visiblePlaces.map(p => {
           const note = userNotesById[p.id];
           const rec = note?.recommended;
@@ -2120,11 +2291,11 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
               }}>
               <div style={{
                 width: 38, height: 38, borderRadius: 10, flexShrink: 0,
-                background: rec ? tokens.greenDeep : tokens.greenSoft,
-                color: rec ? '#fff' : tokens.greenDeep,
+                background: rec ? tokens.greenDeep : p.diet === 'limited' ? tokens.amberSoft : tokens.greenSoft,
+                color: rec ? '#fff' : p.diet === 'limited' ? '#7A4F0B' : tokens.greenDeep,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 16, fontWeight: 700,
-              }}>{rec ? '★' : '✓'}</div>
+              }}>{rec ? '★' : dietInfo(p.diet).icon}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{
                   fontSize: 15, fontWeight: 600, color: tokens.ink, letterSpacing: -0.2,
@@ -2134,21 +2305,11 @@ function RestaurantsScreen({ favorites = [], onOpenProduct }) {
                   fontSize: 12.5, color: tokens.inkMuted, marginTop: 2,
                   display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
                 }}>
-                  <span>{p.amenity === 'cafe' ? 'Cafetería' :
-                          p.amenity === 'bakery' ? 'Panadería' :
-                          p.amenity === 'fast_food' ? 'Comida rápida' :
-                          p.amenity === 'ice_cream' ? 'Heladería' :
-                          p.amenity === 'pub' ? 'Pub' :
-                          p.amenity === 'bar' ? 'Bar' :
-                          'Restaurante'}</span>
+                  <span>{AMENITY_LABEL[p.amenity] || 'Restaurante'}</span>
                   <span style={{ opacity: 0.4 }}>·</span>
                   <span>{fmtDistance(p.distance)}</span>
-                  {p.diet === 'only' && (
-                    <>
-                      <span style={{ opacity: 0.4 }}>·</span>
-                      <span style={{ color: tokens.green, fontWeight: 600 }}>100% SG</span>
-                    </>
-                  )}
+                  <span style={{ opacity: 0.4 }}>·</span>
+                  <span style={{ color: dietInfo(p.diet).color, fontWeight: 600 }}>{dietInfo(p.diet).short}</span>
                 </div>
                 {note?.note && (
                   <div style={{
@@ -2264,9 +2425,15 @@ function PlaceSheet({ place, note, onClose, onToggleRecommend, onSaveNote }) {
         </div>
 
         <div style={{ fontSize: 13.5, color: tokens.inkMuted, marginBottom: 18 }}>
-          {place.amenity === 'cafe' ? 'Cafetería' : place.amenity === 'bakery' ? 'Panadería' : 'Restaurante'}
-          {place.cuisine && ` · ${place.cuisine.replace(/_/g, ' ')}`}
-          {place.diet === 'only' && <span style={{ color: tokens.green, fontWeight: 600 }}> · 100% sin gluten</span>}
+          {AMENITY_LABEL[place.amenity] || 'Restaurante'}
+          {place.cuisine && ` · ${place.cuisine.replace(/_/g, ' ').replace(/;/g, ', ')}`}
+          <span style={{ color: dietInfo(place.diet).color, fontWeight: 600 }}> · {dietInfo(place.diet).label}</span>
+          {(place.address || place.city) && (
+            <div style={{ marginTop: 4 }}>{[place.address, place.city].filter(Boolean).join(', ')}</div>
+          )}
+          {place.opening_hours && (
+            <div style={{ marginTop: 4, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>🕑 {place.opening_hours}</div>
+          )}
         </div>
 
         {/* Actions */}
@@ -2340,8 +2507,41 @@ function PlaceSheet({ place, note, onClose, onToggleRecommend, onSaveNote }) {
           )}
         </div>
 
+        {/* Qué preguntar antes de pedir */}
+        <details style={{
+          background: place.diet === 'limited' ? tokens.amberSoft : tokens.surface,
+          borderRadius: 14, padding: '12px 14px', marginBottom: 12,
+          border: `1px solid ${place.diet === 'limited' ? 'transparent' : tokens.divider}`,
+        }} open={place.diet === 'limited'}>
+          <summary style={{ cursor: 'pointer', fontSize: 14, fontWeight: 600, color: tokens.ink }}>
+            Pregunta antes de pedir
+          </summary>
+          {place.diet === 'limited' && (
+            <div style={{ fontSize: 12.5, color: '#7A4F0B', margin: '8px 0 0', lineHeight: 1.45 }}>
+              Este local solo tiene «algunas opciones»: el riesgo de contaminación cruzada es mayor.
+            </div>
+          )}
+          <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13, color: tokens.inkSoft, lineHeight: 1.55 }}>
+            {ASK_CHECKLIST.map(q => <li key={q}>{q}</li>)}
+          </ul>
+        </details>
+
         {/* External links */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {place.phone && (
+            <a
+              href={`tel:${place.phone.split(';')[0].replace(/[^\d+]/g, '')}`}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+                background: tokens.surface, borderRadius: 12,
+                border: `1px solid ${tokens.divider}`,
+                color: tokens.ink, textDecoration: 'none', fontSize: 14,
+                fontFamily: fonts.sans, fontWeight: 500,
+              }}>
+              <span style={{ fontSize: 18 }}>📞</span>
+              Llamar · {place.phone.split(';')[0]}
+            </a>
+          )}
           <a
             href={`https://www.openstreetmap.org/?mlat=${place.lat}&mlon=${place.lon}&zoom=18`}
             target="_blank" rel="noopener noreferrer"
@@ -2356,7 +2556,7 @@ function PlaceSheet({ place, note, onClose, onToggleRecommend, onSaveNote }) {
             Abrir en OpenStreetMap
           </a>
           <a
-            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}&center=${place.lat},${place.lon}`}
+            href={googleMapsUrl(place)}
             target="_blank" rel="noopener noreferrer"
             style={{
               display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
@@ -2366,7 +2566,7 @@ function PlaceSheet({ place, note, onClose, onToggleRecommend, onSaveNote }) {
               fontFamily: fonts.sans, fontWeight: 500,
             }}>
             <span style={{ fontSize: 18 }}>📍</span>
-            Ver en Google Maps (reseñas)
+            Ver reseñas en Google Maps
           </a>
           {place.website && (
             <a
@@ -2388,7 +2588,9 @@ function PlaceSheet({ place, note, onClose, onToggleRecommend, onSaveNote }) {
         <div style={{
           marginTop: 14, fontSize: 11.5, color: tokens.inkMuted, lineHeight: 1.5, textAlign: 'center', padding: '0 8px',
         }}>
-          Datos de OpenStreetMap. Confirma siempre la información en el restaurante antes de pedir.
+          Datos de OpenStreetMap. Confirma siempre la información en el restaurante antes de pedir.{' '}
+          <a href={osmEditUrl(place.lat, place.lon)} target="_blank" rel="noopener noreferrer"
+            style={{ color: tokens.green, fontWeight: 600 }}>¿Algo incorrecto? Corrígelo</a>
         </div>
       </div>
     </div>
@@ -2816,6 +3018,13 @@ function ProfileScreen({ profile, onChange, stats }) {
             onChange={v => set('warnDoubts', v)}
           />
         </div>
+        <div style={{ fontSize: 12.5, color: tokens.inkMuted, lineHeight: 1.45, margin: '10px 4px 0' }}>
+          {profile.sensitivity === 'celiac'
+            ? 'Como celíaco/a, las trazas y los ingredientes dudosos se marcan como «dudoso». Si desactivas un aviso, esos productos saldrán como aptos, pero el aviso seguirá visible en la ficha.'
+            : profile.sensitivity === 'sensitive'
+              ? 'Con «Sensible al gluten», las trazas no bloquean el producto (el aviso sigue visible en la ficha). Lo que lleva gluten siempre sale como «No apto».'
+              : 'Con «Por elección», las trazas y los ingredientes dudosos no bloquean el producto (el aviso sigue visible en la ficha). Lo que lleva gluten siempre sale como «No apto».'}
+        </div>
       </div>
 
       {/* Theme */}
@@ -3203,17 +3412,29 @@ function GlutenZeroApp() {
   };
   const isFavorite = !!(resultProduct && resultProduct.barcode && favorites.some(f => f.barcode === resultProduct.barcode));
 
+  // Muestra un análisis ESTRICTO ajustado al perfil y lo guarda en historial
+  const present = (strict, { record = true } = {}) => {
+    const shown = GlutenEngine.applyProfile(strict, profile);
+    if (record) setHistory(historyStore.add(shown));
+    setResultProduct(shown);
+    setScreen('result');
+  };
+
   // Real lookup: call Open Food Facts and analyze
   const onLookup = async (barcode) => {
-    const raw = await OFF.fetchProduct(barcode);
-    const analyzed = GlutenEngine.analyze(raw);
-    // Persist to history if it's a real product (not an error stub)
-    if (analyzed && analyzed.name && !analyzed.error) {
-      const next = historyStore.add({ ...analyzed, barcode });
-      setHistory(next);
+    let strict;
+    try {
+      const raw = await OFF.fetchProduct(barcode);
+      strict = { ...GlutenEngine.analyze(raw), barcode };
+      productCache.put(strict);
+    } catch (e) {
+      // Sin cobertura (típico en el súper): si ya lo habíamos consultado, lo
+      // mostramos desde la copia guardada en vez de dar error
+      const cached = (e.code === 'network' || e.code === 'timeout') && productCache.get(barcode);
+      if (!cached) throw e;
+      strict = { ...cached, offline: true };
     }
-    setResultProduct(analyzed);
-    setScreen('result');
+    present(strict);
   };
 
   // OCR lookup: analyze raw ingredient text from a label photo
@@ -3221,17 +3442,28 @@ function GlutenZeroApp() {
     const analyzed = GlutenEngine.analyzeText(text);
     if (!analyzed) return;
     // Tag with a synthetic barcode so favorites/history dedup still works
-    const syntheticBarcode = 'ocr-' + Date.now();
-    const product = { ...analyzed, barcode: syntheticBarcode };
-    const next = historyStore.add(product);
-    setHistory(next);
-    setResultProduct(product);
-    setScreen('result');
+    const strict = { ...analyzed, barcode: 'ocr-' + Date.now() };
+    productCache.put(strict);
+    present(strict);
+  };
+
+  // Abrir un producto del historial / favoritos / recientes
+  const openSaved = async (p) => {
+    if (!p || !p.barcode) return;
+    const cached = productCache.get(p.barcode);
+    if (p.barcode.startsWith('ocr-')) {
+      // Una lectura de foto no se puede volver a consultar: usamos la guardada
+      if (cached) present(cached, { record: false });
+      return;
+    }
+    try { await onLookup(p.barcode); }
+    catch { if (cached) present({ ...cached, offline: true }, { record: false }); }
   };
 
   const clearHistory = () => {
     if (typeof window !== 'undefined' && window.confirm('¿Borrar todo el historial?')) {
       historyStore.clear();
+      productCache.clear();
       setHistory([]);
     }
   };
@@ -3267,7 +3499,10 @@ function GlutenZeroApp() {
           transition: 'opacity 0.25s',
         }}>
           <div style={{ width: '100%', height: '100%', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
-            <HomeScreen onScan={goScan} userName={profile.name} recent={history} />
+            <HomeScreen
+              onScan={goScan} userName={profile.name} recent={history}
+              onOpen={openSaved} onSeeAll={() => setScreen('history')}
+            />
           </div>
           <BottomTabs active="home" onScan={goScan} onNavigate={navigate} />
         </div>
@@ -3282,10 +3517,7 @@ function GlutenZeroApp() {
             <HistoryScreen
               items={history}
               onClear={clearHistory}
-              onOpen={(p) => {
-                // Re-look up to show a fresh result (uses cached barcode if available)
-                if (p.barcode) onLookup(p.barcode);
-              }}
+              onOpen={openSaved}
             />
           </div>
           <BottomTabs active="history" onScan={goScan} onNavigate={navigate} />
@@ -3300,7 +3532,7 @@ function GlutenZeroApp() {
           {screen === 'restaurants' && (
             <RestaurantsScreen
               favorites={favorites}
-              onOpenProduct={(p) => { if (p.barcode) onLookup(p.barcode); }}
+              onOpenProduct={openSaved}
             />
           )}
           <BottomTabs active="fav" onScan={goScan} onNavigate={navigate} />
@@ -3315,7 +3547,7 @@ function GlutenZeroApp() {
           <div style={{ width: '100%', height: '100%', overflow: 'auto', WebkitOverflowScrolling: 'touch' }}>
             <FavoritesScreen
               items={favorites}
-              onOpen={(p) => { if (p.barcode) onLookup(p.barcode); }}
+              onOpen={openSaved}
               onRemove={removeFavorite}
             />
           </div>
@@ -3359,6 +3591,7 @@ function GlutenZeroApp() {
               product={resultProduct}
               onClose={goHome}
               onScanAgain={() => { setScreen('scanner'); }}
+              onPhotoLabel={() => { setScanMode('label'); setScreen('scanner'); }}
               isFavorite={isFavorite}
               onToggleFavorite={toggleFavorite}
             />

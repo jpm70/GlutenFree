@@ -50,14 +50,15 @@
     });
   }
 
-  // Query restaurants/cafes/bakeries with diet:gluten_free=yes|only within radius (meters)
+  // Query restaurants/cafes/bakeries with diet:gluten_free=yes|only|limited within radius (meters)
+  // («limited» = tiene algunas opciones sin gluten; se muestra aparte, en ámbar)
   // We use POST (more reliable for long queries) with content-type form-urlencoded.
   async function findGlutenFreePlaces({ lat, lon, radius = 2500 }) {
     const r = Math.max(200, Math.min(10000, Math.round(radius)));
     const q = `[out:json][timeout:25];
 (
-  node["amenity"~"^(restaurant|cafe|bakery|fast_food|ice_cream|pub|bar|food_court)$"]["diet:gluten_free"~"^(yes|only)$"](around:${r},${lat},${lon});
-  way["amenity"~"^(restaurant|cafe|bakery|fast_food|ice_cream|pub|bar|food_court)$"]["diet:gluten_free"~"^(yes|only)$"](around:${r},${lat},${lon});
+  node["amenity"~"^(restaurant|cafe|bakery|fast_food|ice_cream|pub|bar|food_court)$"]["diet:gluten_free"~"^(yes|only|limited)$"](around:${r},${lat},${lon});
+  way["amenity"~"^(restaurant|cafe|bakery|fast_food|ice_cream|pub|bar|food_court)$"]["diet:gluten_free"~"^(yes|only|limited)$"](around:${r},${lat},${lon});
 );
 out center 60;`;
 
